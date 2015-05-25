@@ -8,16 +8,6 @@ namespace GoGoTester.Common
 {
     static class FormExtensions
     {
-        //static public void UIThread(this Form form, MethodInvoker code)
-        //{
-        //    if (form.InvokeRequired)
-        //    {
-        //        form.Invoke(code);
-        //        return;
-        //    }
-        //    code.Invoke();
-        //}
-
         public static void UIThread(this Control invokerControl, MethodInvoker uiOperationMethod)
         {
             if (invokerControl.InvokeRequired)

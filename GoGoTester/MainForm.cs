@@ -31,9 +31,10 @@ namespace GoGoTester
         private static readonly Regex RxMatchIPv4 = new Regex(@"(?<!:)((2(5[0-5]|[0-4]\d)|1?\d?\d)\.){3}(2(5[0-5]|[0-4]\d)|1?\d?\d)", RegexOptions.Compiled);
         private static readonly Regex RxMatchIPv6 = new Regex(@"(:|[\da-f]{1,4})(:?:[\da-f]{1,4})+(::)?", RegexOptions.Compiled);
         private static readonly Regex RxDomain = new Regex(@"[\w\-\.]+", RegexOptions.Compiled);
+        private static readonly Regex RxResult = new Regex(@"^(HTTP/... (\d+).*|Server:\s*(\w.*))$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Multiline);
 
-        private static readonly Stopwatch Watch = new Stopwatch();
-        private static readonly SoundPlayer SoundPlayer = new SoundPlayer { Stream = Resources.Windows_Ding };
+        private static readonly Stopwatch _watch = new Stopwatch();
+        private static readonly SoundPlayer _soundPlayer = new SoundPlayer { Stream = Resources.Windows_Ding };
 
         private readonly Dictionary<string, IpPool> PoolDic = new Dictionary<string, IpPool>();
         private readonly DataTable IpTable = new DataTable();
@@ -90,10 +91,10 @@ namespace GoGoTester
             LoadTestCache();
             LoadIpPools();
 
-            Watch.Start();
+            _watch.Start();
 
-            var aaa = new NewVersionChecker();
-            aaa.CheckNewUpdate(HasUpdate);
+            var newVersionChecker = new NewVersionChecker();
+            newVersionChecker.CheckNewUpdate(HasUpdate);
         }
 
         private static int SetRange(int val, int min, int max)
@@ -158,20 +159,27 @@ namespace GoGoTester
                 cbPools.DataSource = PoolDic.Keys.ToArray();
             }
         }
+
         private void LoadSpfPools()
         {
             try
             {
                 var domains = new[] { "google.com" };
                 if (File.Exists("spf.txt"))
+                {
                     using (var sr = File.OpenText("spf.txt"))
+                    {
                         domains = (from Match m in RxDomain.Matches(sr.ReadToEnd()) select m.Value).ToArray();
+                    }
+                }
+
                 PoolDic.Add("@Spf.Ipv4", IpPool.CreateFromDomains(domains));
 
                 SetPools();
             }
             catch (Exception) { }
         }
+
         private void StdTestTimerElapsed(object sender, ElapsedEventArgs e)
         {
             Monitor.Enter(ThreadQueue);
@@ -197,9 +205,13 @@ namespace GoGoTester
             {
                 StdTestTimer.Stop();
                 if (StdTestRunning)
+                {
                     PlaySound();
+                }
+
                 StopTest();
             }
+
             Monitor.Exit(WaitQueue);
         }
 
@@ -243,20 +255,24 @@ namespace GoGoTester
                         ImportIp(addr);
                         SetTestResult(info);
                     }
-                    DeCount(ThreadQueue);
 
+                    DeCount(ThreadQueue);
                 }).Start();
             }
             else if (threadCount == 0)
             {
                 RndTestTimer.Stop();
                 if (RndTestRunning)
+                {
                     PlaySound();
+                }
+
                 StopTest();
                 SaveTestCache();
             }
             Monitor.Exit(TestCaches);
         }
+
         private void BndTestTimer_Elapsed(object sender, ElapsedEventArgs e)
         {
             Monitor.Enter(ThreadQueue);
@@ -282,9 +298,13 @@ namespace GoGoTester
             {
                 BndTestTimer.Stop();
                 if (BndTestRunning)
+                {
                     PlaySound();
+                }
+
                 StopTest();
             }
+
             Monitor.Exit(WaitQueue);
         }
 
@@ -295,7 +315,7 @@ namespace GoGoTester
             if (InvokeRequired)
                 Invoke(new MethodInvoker(PlaySound));
             else
-                SoundPlayer.Play();
+                _soundPlayer.Play();
         }
 
         private void SetStdProgress(int testCount, int waitCount)
@@ -335,7 +355,9 @@ namespace GoGoTester
 
             return socket;
         }
+
         #region Test
+
         private TestInfo TestBandwidth(TestInfo info)
         {
             const int m = 2;
@@ -354,7 +376,7 @@ namespace GoGoTester
                                 if (ssls.IsAuthenticated)
                                 {
                                     var data = Encoding.UTF8.GetBytes("GET /p/gogo-tester/source/browse/1m.wiki?repo=wiki HTTP/1.1\r\nHost: code.google.com\r\nConnection: close\r\n\r\n");
-                                    var time = Watch.ElapsedMilliseconds;
+                                    var time = _watch.ElapsedMilliseconds;
                                     ssls.Write(data, 0, data.Length);
                                     ssls.Flush();
                                     using (var sr = new StreamReader(ssls))
@@ -364,7 +386,7 @@ namespace GoGoTester
                                         {
                                             var buf = sr.ReadToEnd();
                                             info.Bandwidth =
-                                                (buf.Length / (Watch.ElapsedMilliseconds - time)).ToString("D4") + " KB/s";
+                                                (buf.Length / (_watch.ElapsedMilliseconds - time)).ToString("D4") + " KB/s";
                                         }
                                         catch (Exception)
                                         {
@@ -416,16 +438,17 @@ namespace GoGoTester
             }
             return info;
         }
+
         private bool TestPortViaSocket(Socket socket, TestInfo info)
         {
             try
             {
-                var time = Watch.ElapsedMilliseconds;
+                var time = _watch.ElapsedMilliseconds;
                 if (socket.BeginConnect(info.Target, null, null).AsyncWaitHandle.WaitOne(Config.ConnTimeout)
                     && socket.Connected)
                 {
 
-                    info.PortTime += Watch.ElapsedMilliseconds - time;
+                    info.PortTime += _watch.ElapsedMilliseconds - time;
                     info.PortOk = true;
                     info.PortMsg = "_OK ";
                 }
@@ -445,7 +468,7 @@ namespace GoGoTester
 
             return info.PortOk;
         }
-        private static readonly Regex RxResult = new Regex(@"^(HTTP/... (\d+).*|Server:\s*(\w.*))$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Multiline);
+
         private bool TestHttpViaSocket(Socket socket, TestInfo info)
         {
             try
@@ -519,7 +542,9 @@ namespace GoGoTester
 
             return info.HttpOk;
         }
+
         #endregion
+
         private void SetTestResult(TestInfo info)
         {
             if (InvokeRequired)
@@ -537,6 +562,7 @@ namespace GoGoTester
                 }
             }
         }
+
         private void SetBandResult(TestInfo info)
         {
             if (InvokeRequired)
@@ -550,7 +576,9 @@ namespace GoGoTester
                     rows[0][4] = info.Bandwidth;
             }
         }
+
         #region IpTable
+
         private void RemoveIp(Ip addr)
         {
             var row = SelectByIp(addr);
@@ -559,6 +587,7 @@ namespace GoGoTester
                 IpTable.Rows.Remove(row[0]);
             }
         }
+
         private void ImportIp(Ip addr)
         {
             if (InvokeRequired)
@@ -580,6 +609,7 @@ namespace GoGoTester
                 catch (Exception) { }
             }
         }
+
         private void ImportIps(IEnumerable<Ip> addrs)
         {
             if (InvokeRequired)
@@ -596,6 +626,7 @@ namespace GoGoTester
 
             }
         }
+
         private void RemoveAllIps()
         {
             IpTable.Clear();
@@ -625,6 +656,7 @@ namespace GoGoTester
             else
                 return IpTable.Select("port = 'n/a'");
         }
+
         private DataRow[] SelectBandNa()
         {
             if (InvokeRequired)
@@ -632,17 +664,18 @@ namespace GoGoTester
             else
                 return IpTable.Select("band = 'n/a' and port like '_OK%' and sslc not like 'NN%'");
         }
+
         private void SetAllNa()
         {
             foreach (var row in IpTable.Select())
                 row[4] = row[3] = row[2] = row[1] = "n/a";
         }
+
         private void SetNa(string coln)
         {
             foreach (var row in IpTable.Select())
                 row[coln] = "n/a";
         }
-
 
         #endregion
 
@@ -754,6 +787,7 @@ namespace GoGoTester
             BndTestTimer.Start();
             tlpConfig.Enabled = false;
         }
+
         private void mRndTest_Click(object sender, EventArgs e)
         {
             if (IsTesting()) return;
@@ -774,6 +808,7 @@ namespace GoGoTester
 
             tlpConfig.Enabled = false;
         }
+
         private void mStdTest_Click(object sender, EventArgs e)
         {
             if (IsTesting() || IpTable.Rows.Count == 0) return;
@@ -887,11 +922,11 @@ namespace GoGoTester
             StdTestTimer.Interval = (1000.0 / Config.MaxThreads);
             RndTestTimer.Interval = (1000.0 / Config.MaxThreads);
         }
+
         private void nTestCount_ValueChanged(object sender, EventArgs e)
         {
             Config.PassCount = Convert.ToInt32(nTestCount.Value);
         }
-
 
         private void mStopTest_Click(object sender, EventArgs e)
         {
@@ -910,6 +945,7 @@ namespace GoGoTester
                 tlpConfig.Enabled = true;
             }
         }
+
         private void mExportAllIps_Click(object sender, EventArgs e)
         {
             var cells = GetAllIpCells();
@@ -1093,7 +1129,6 @@ namespace GoGoTester
                 string.Format("(port <> 'n/a' and port not like '_OK%') or (sslc <> 'n/a' and sslc like 'NN%')"));
         }
 
-
         private void mClearRndCache_Click(object sender, EventArgs e)
         {
             if (IsTesting())
@@ -1105,6 +1140,7 @@ namespace GoGoTester
             if (File.Exists("gogo_cache"))
                 File.Delete("gogo_cache");
         }
+
         private void dgvIpData_RowPostPaint(object sender, DataGridViewRowPostPaintEventArgs e)
         {
             var bounds = new Rectangle(e.RowBounds.Location.X, e.RowBounds.Location.Y, dgvIpData.RowHeadersWidth - 4, e.RowBounds.Height);
