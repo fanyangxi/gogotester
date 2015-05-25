@@ -7,8 +7,8 @@
     <ProjectGuid>{2D6CB647-76FD-4433-95DD-BD16C9F574B6}</ProjectGuid>
     <OutputType>WinExe</OutputType>
     <AppDesignerFolder>Properties</AppDesignerFolder>
-    <RootNamespace>GoGo_Tester</RootNamespace>
-    <AssemblyName>GoGo Tester</AssemblyName>
+    <RootNamespace>GoGoTester</RootNamespace>
+    <AssemblyName>GoGoTester</AssemblyName>
     <TargetFrameworkVersion>v4.0</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <IsWebBootstrapper>false</IsWebBootstrapper>
@@ -49,7 +49,7 @@
     <UseVSHostingProcess>true</UseVSHostingProcess>
   </PropertyGroup>
   <PropertyGroup>
-    <ApplicationIcon>Resources\GoGo logo.ico</ApplicationIcon>
+    <ApplicationIcon>Resources\GoGo_Logo.ico</ApplicationIcon>
   </PropertyGroup>
   <PropertyGroup />
   <ItemGroup>
@@ -114,7 +114,7 @@
     <None Include="ver" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="Resources\GoGo logo.ico" />
+    <None Include="Resources\GoGo_Logo.ico" />
   </ItemGroup>
   <ItemGroup>
     <BootstrapperPackage Include="Microsoft.Net.Client.3.5">

@@ -1,4 +1,4 @@
-﻿using GoGo_Tester.Properties;
+﻿using GoGoTester.Properties;
 using System;
 using System.Collections.Generic;
 using System.Data;
