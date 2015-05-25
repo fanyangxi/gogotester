@@ -1,6 +1,6 @@
 ﻿using System.Net;
 
-namespace GoGo_Tester
+namespace GoGoTester
 {
     class TestInfo
     {

@@ -3,7 +3,7 @@ using System.Reflection;
 using System.Resources;
 using System.Windows.Forms;
 
-namespace GoGo_Tester
+namespace GoGoTester
 {
     static class Program
     {
@@ -27,7 +27,7 @@ namespace GoGo_Tester
 
             if (dllName.EndsWith("_resources")) return null;
 
-            var rm = new ResourceManager("GoGo_Tester.Properties.Resources", Assembly.GetExecutingAssembly());
+            var rm = new ResourceManager("GoGoTester.Properties.Resources", Assembly.GetExecutingAssembly());
             var bytes = (byte[])rm.GetObject(dllName);
             return Assembly.Load(bytes);
         }

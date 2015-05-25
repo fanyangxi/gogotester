@@ -2,7 +2,7 @@
 using System.Data;
 using System.IO;
 
-namespace GoGo_Tester
+namespace GoGoTester
 {
     class IniFile
     {

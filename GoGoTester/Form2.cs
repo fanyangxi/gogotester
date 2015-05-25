@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Windows.Forms;
 
-namespace GoGo_Tester
+namespace GoGoTester
 {
     public partial class Form2 : Form
     {

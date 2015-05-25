@@ -1,4 +1,5 @@
-﻿using GoGoTester.Properties;
+﻿using GoGoTester.Common;
+using GoGoTester.Properties;
 using System;
 using System.Collections.Generic;
 using System.Data;
@@ -17,59 +18,41 @@ using System.Timers;
 using System.Windows.Forms;
 using Timer = System.Timers.Timer;
 
-namespace GoGo_Tester
+namespace GoGoTester
 {
     public partial class MainForm : Form
     {
-        private static int SetRange(int val, int min, int max)
-        {
-            val = val > min ? val : min;
-            val = val < max ? val : max;
-            return val;
-        }
+        public static HashSet<Ip> TestCaches = new HashSet<Ip>();
+        public static HashSet<Ip> ExtraCaches = new HashSet<Ip>();
+        public static Queue<Ip> WaitQueue = new Queue<Ip>();
+        public static Queue<int> ThreadQueue = new Queue<int>();
 
-        private static void EnCount(Queue<int> q)
-        {
-            Monitor.Enter(q);
-            q.Enqueue(0);
-            Monitor.Exit(q);
-        }
+        private static readonly Random Rand = new Random();
+        private static readonly Regex RxMatchIPv4 = new Regex(@"(?<!:)((2(5[0-5]|[0-4]\d)|1?\d?\d)\.){3}(2(5[0-5]|[0-4]\d)|1?\d?\d)", RegexOptions.Compiled);
+        private static readonly Regex RxMatchIPv6 = new Regex(@"(:|[\da-f]{1,4})(:?:[\da-f]{1,4})+(::)?", RegexOptions.Compiled);
+        private static readonly Regex RxDomain = new Regex(@"[\w\-\.]+", RegexOptions.Compiled);
 
-        private static void DeCount(Queue<int> q)
-        {
-            Monitor.Enter(q);
-            q.Dequeue();
-            Monitor.Exit(q);
-        }
+        private static readonly Stopwatch Watch = new Stopwatch();
+        private static readonly SoundPlayer SoundPlayer = new SoundPlayer { Stream = Resources.Windows_Ding };
+
+        private readonly Dictionary<string, IpPool> PoolDic = new Dictionary<string, IpPool>();
+        private readonly DataTable IpTable = new DataTable();
+        private readonly Timer StdTestTimer = new Timer();
+        private readonly Timer RndTestTimer = new Timer();
+        private readonly Timer BndTestTimer = new Timer();
+
+        private volatile bool StdTestRunning;
+        private volatile bool RndTestRunning;
+        private volatile bool BndTestRunning;
+
+        private string _curAddrPool;
+        private List<Ip> _curAddrList = new List<Ip>();
 
         public MainForm()
         {
             InitializeComponent();
         }
 
-        private static readonly Random Rand = new Random();
-        private static readonly Regex RxMatchIPv4 = new Regex(@"(?<!:)((2(5[0-5]|[0-4]\d)|1?\d?\d)\.){3}(2(5[0-5]|[0-4]\d)|1?\d?\d)", RegexOptions.Compiled);
-        private static readonly Regex RxMatchIPv6 = new Regex(@"(:|[\da-f]{1,4})(:?:[\da-f]{1,4})+(::)?", RegexOptions.Compiled);
-
-        private static readonly Stopwatch Watch = new Stopwatch();
-        private static readonly SoundPlayer SoundPlayer = new SoundPlayer { Stream = Resources.Windows_Ding };
-
-        private readonly Dictionary<string, IpPool> PoolDic = new Dictionary<string, IpPool>();
-        private string CurAddrPool;
-        private List<Ip> CurAddrList = new List<Ip>();
-        private readonly DataTable IpTable = new DataTable();
-        private readonly Timer StdTestTimer = new Timer();
-        private readonly Timer RndTestTimer = new Timer();
-        private readonly Timer BndTestTimer = new Timer();
-
-        public static HashSet<Ip> TestCaches = new HashSet<Ip>();
-        public static HashSet<Ip> ExtraCaches = new HashSet<Ip>();
-        public static Queue<Ip> WaitQueue = new Queue<Ip>();
-        public static Queue<int> ThreadQueue = new Queue<int>();
-
-        private volatile bool StdTestRunning;
-        private volatile bool RndTestRunning;
-        private volatile bool BndTestRunning;
         private void Form1_Load(object sender, EventArgs e)
         {
             Icon = Resources.GoGo_logo;
@@ -109,42 +92,39 @@ namespace GoGo_Tester
 
             Watch.Start();
 
-            CheckUpdate();
+            var aaa = new NewVersionChecker();
+            aaa.CheckNewUpdate(HasUpdate);
         }
 
-        private void CheckUpdate()
+        private static int SetRange(int val, int min, int max)
         {
-            try
+            val = val > min ? val : min;
+            val = val < max ? val : max;
+            return val;
+        }
+
+        private static void EnCount(Queue<int> q)
+        {
+            Monitor.Enter(q);
+            q.Enqueue(0);
+            Monitor.Exit(q);
+        }
+
+        private static void DeCount(Queue<int> q)
+        {
+            Monitor.Enter(q);
+            q.Dequeue();
+            Monitor.Exit(q);
+        }
+
+        private void HasUpdate(long currentVersionNumber, long newVersionNumber)
+        {
+            this.UIThread(() =>
             {
-                var req = WebRequest.Create(
-                    "https://raw.githubusercontent.com/azzvx/gogotester/2.3/GoGo%20Tester/bin/Release/ver");
-                req.BeginGetResponse(ar =>
-                {
-                    if (!ar.IsCompleted) return;
-
-                    var resps = req.EndGetResponse(ar).GetResponseStream();
-
-                    if (resps == null) return;
-
-                    using (var sr = new StreamReader(resps))
-                    {
-                        if (long.Parse(sr.ReadToEnd()) > Config.Version)
-                            HasUpdate();
-                    }
-                }, null);
-            }
-            catch { }
+                linkLabel1.Text += string.Format(" - 有可用更新! - {0}", newVersionNumber);
+            });
         }
 
-        private void HasUpdate()
-        {
-            if (InvokeRequired)
-                Invoke(new MethodInvoker(HasUpdate));
-            else
-                linkLabel1.Text += " - 有可用更新！";
-        }
-
-        private static readonly Regex RxDomain = new Regex(@"[\w\-\.]+", RegexOptions.Compiled);
         private void LoadIpPools()
         {
             PoolDic.Add("@Inner", IpPool.CreateFromText(Resources.InnerIpSet));
@@ -238,18 +218,18 @@ namespace GoGo_Tester
 
             if (RndTestRunning && waitCount < Form2.RandomNumber && threadCount < Config.MaxThreads)
             {
-                Monitor.Enter(CurAddrList);
-                if (CurAddrList.Count == 0)
+                Monitor.Enter(_curAddrList);
+                if (_curAddrList.Count == 0)
                 {
                     RndTestRunning = false;
-                    Monitor.Exit(CurAddrList);
+                    Monitor.Exit(_curAddrList);
                     return;
                 }
 
-                var addr = CurAddrList[Rand.Next(CurAddrList.Count)];
-                CurAddrList.Remove(addr);
+                var addr = _curAddrList[Rand.Next(_curAddrList.Count)];
+                _curAddrList.Remove(addr);
 
-                Monitor.Exit(CurAddrList);
+                Monitor.Exit(_curAddrList);
 
                 TestCaches.Add(addr);
 
@@ -307,6 +287,8 @@ namespace GoGo_Tester
             }
             Monitor.Exit(WaitQueue);
         }
+
+        /*** Utilities ***/
 
         private void PlaySound()
         {
@@ -782,7 +764,7 @@ namespace GoGo_Tester
             if (Form2.RandomNumber == 0)
                 return;
 
-            Form2.RandomNumber = Form2.RandomNumber > CurAddrList.Count ? CurAddrList.Count : Form2.RandomNumber;
+            Form2.RandomNumber = Form2.RandomNumber > _curAddrList.Count ? _curAddrList.Count : Form2.RandomNumber;
 
             pbProgress.Maximum = Form2.RandomNumber;
             pbProgress.Value = 0;
@@ -1117,9 +1099,9 @@ namespace GoGo_Tester
             if (IsTesting())
                 return;
             TestCaches.Clear();
-            CurAddrList.Clear();
-            CurAddrList.AddRange(PoolDic[cbPools.SelectedItem.ToString()]);
-            CurAddrList.TrimExcess();
+            _curAddrList.Clear();
+            _curAddrList.AddRange(PoolDic[cbPools.SelectedItem.ToString()]);
+            _curAddrList.TrimExcess();
             if (File.Exists("gogo_cache"))
                 File.Delete("gogo_cache");
         }
@@ -1132,14 +1114,14 @@ namespace GoGo_Tester
         private void cbPools_SelectedIndexChanged(object sender, EventArgs e)
         {
             var addrpool = cbPools.SelectedItem.ToString();
-            if (addrpool == CurAddrPool) return;
+            if (addrpool == _curAddrPool) return;
 
-            CurAddrPool = addrpool;
-            CurAddrList.Clear();
-            CurAddrList.AddRange(PoolDic[CurAddrPool].Except(TestCaches));
-            CurAddrList.TrimExcess();
-            Text = string.Format("GoGo Tester {0} - {1}", Application.ProductVersion, CurAddrList.Count);
-            SetStdProgress(CurAddrList.Count, TestCaches.Count);
+            _curAddrPool = addrpool;
+            _curAddrList.Clear();
+            _curAddrList.AddRange(PoolDic[_curAddrPool].Except(TestCaches));
+            _curAddrList.TrimExcess();
+            Text = string.Format("GoGo Tester {0} - {1}", Application.ProductVersion, _curAddrList.Count);
+            SetStdProgress(_curAddrList.Count, TestCaches.Count);
         }
 
         private void mRemoveInvalidIps_Click(object sender, EventArgs e)

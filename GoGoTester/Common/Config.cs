@@ -1,4 +1,4 @@
-﻿namespace GoGo_Tester
+﻿namespace GoGoTester
 {
     static class Config
     {

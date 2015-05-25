@@ -7,7 +7,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using ARSoft.Tools.Net.Dns;
 
-namespace GoGo_Tester
+namespace GoGoTester
 {
     static class Exts
     {
