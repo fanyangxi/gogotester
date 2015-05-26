@@ -15,6 +15,7 @@ namespace GoGoTester
         {
             return BitConverter.GetBytes(o);
         }
+
         public static byte[] GetRevBytes(this uint o)
         {
             var d = BitConverter.GetBytes(o);
@@ -23,78 +24,6 @@ namespace GoGoTester
         }
     }
 
-    public struct Ip
-    {
-        public byte[] AddressBytes;
-
-        public Ip(byte[] bytes, bool _le = false)
-        {
-            if (bytes.Length == 4 || bytes.Length == 16)
-            {
-                if (_le) Array.Reverse(bytes);
-                AddressBytes = bytes;
-            }
-            else
-            {
-                AddressBytes = new byte[] { 0, 0, 0, 0 };
-            }
-        }
-
-        public IPAddress GetIpAddress()
-        {
-            return new IPAddress(AddressBytes);
-        }
-
-        public AddressFamily GetAddressFamily()
-        {
-            return AddressBytes.Length == 4 ? AddressFamily.InterNetwork : AddressFamily.InterNetworkV6;
-        }
-
-        public override int GetHashCode()
-        {
-            ulong sum = 0;
-            for (var i = 0; i < AddressBytes.Length / 4; i++)
-                sum += BitConverter.ToUInt32(AddressBytes, i * 4);
-            var high = sum & 0xffffffff00000000;
-            return (int)(sum + high);
-        }
-
-        public override bool Equals(object obj)
-        {
-            return GetHashCode() == obj.GetHashCode();
-        }
-
-        public override string ToString()
-        {
-            if (AddressBytes.Length == 4)
-                return string.Format("{0}.{1}.{2}.{3}",
-                    AddressBytes[0].ToString("D"), AddressBytes[1].ToString("D"), AddressBytes[2].ToString("D"), AddressBytes[3].ToString("D"));
-
-            var sbd = new StringBuilder();
-            for (int i = 0; i < AddressBytes.Length; i++)
-            {
-                if (i > 0 && i % 2 == 0)
-                    sbd.Append(":");
-                sbd.Append(AddressBytes[i].ToString("X02"));
-            }
-
-            while (sbd[0] == '0')
-                sbd.Remove(0, 1);
-
-            var fstr = sbd.Replace("0000", "").ToString();
-            while (fstr.Contains(":0"))
-                fstr = fstr.Replace(":0", ":");
-            while (fstr.Contains(":::"))
-                fstr = fstr.Replace(":::", "::");
-
-            return fstr;
-        }
-
-        public static Ip Parse(string str)
-        {
-            return new Ip(IPAddress.Parse(str).GetAddressBytes());
-        }
-    }
     class IpPool : HashSet<Ip>
     {
         private static readonly Regex RxIpv4 = new Regex(@"(?<astr>(\d{1,3}\.){3}\d{1,3})/(?<mstr>\d{1,2})|(?<range>((\d{1,3}\-\d{1,3}|\d{1,3})\.){3}(\d{1,3}\-\d{1,3}|\d{1,3}))|(?<domain>[\w\-\.]+\.\w+)", RegexOptions.Compiled);
@@ -162,52 +91,65 @@ namespace GoGoTester
 
         private IpPool() { }
 
-
         private void ImportRange(uint min, uint max)
         {
-            if ((min & 0xff000000) == 0) return;
+            if ((min & 0xff000000) == 0)
+                return;
 
             for (var num = min; num <= max; num++)
             {
                 var dat = num.GetRevBytes();
 
-                if (dat[3] == 0 || dat[3] == 255) continue;
+                if (dat[3] == 0 || dat[3] == 255)
+                    continue;
 
                 Add(new Ip(dat));
             }
         }
 
-        #region spf
+        #region SPF (Service port function, 服务端口功能)
+
         public static IpPool CreateFromDomains(string[] domains)
         {
             var caches = new HashSet<string>(domains);
             var ranges = new HashSet<string>();
 
             var dns = DnsClient.Default;
-
             foreach (var dom in domains)
+            {
                 Lookup(dom, dns, caches, ranges);
+            }
 
             var sbd = new StringBuilder();
             foreach (var range in ranges)
+            {
                 sbd.Append(range).Append(" ");
+            }
 
             return CreateFromText(sbd.ToString());
         }
+
         private static readonly Regex RxSpfInclude = new Regex(@"include:([^\s]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         private static readonly Regex RxSpfIpv4 = new Regex(@"ip4:([^\s]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         private static void Lookup(string domaim, DnsClient dns, ISet<string> caches, ISet<string> ranges)
         {
             foreach (var resp in dns.Resolve(domaim, RecordType.Txt).AnswerRecords.Select(resp => resp.ToString()))
             {
                 foreach (Match m in RxSpfIpv4.Matches(resp))
+                {
                     ranges.Add(m.Groups[1].Value);
+                }
 
                 foreach (
                     var dom in RxSpfInclude.Matches(resp).Cast<Match>().Select(m => m.Groups[1].Value).Where(caches.Add))
+                {
                     Lookup(dom, dns, caches, ranges);
+                }
             }
         }
+
         #endregion
     }
 }

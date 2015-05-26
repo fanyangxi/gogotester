@@ -68,6 +68,7 @@
   <ItemGroup>
     <Compile Include="Common\FormExtensions.cs" />
     <Compile Include="Common\Config.cs" />
+    <Compile Include="Common\Ip.cs" />
     <Compile Include="Common\NewVersionChecker.cs" />
     <Compile Include="Common\Utilities.cs" />
     <Compile Include="MainForm.cs">

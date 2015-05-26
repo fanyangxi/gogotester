@@ -38,12 +38,17 @@ namespace GoGoTester
 
         private readonly Dictionary<string, IpPool> PoolDic = new Dictionary<string, IpPool>();
         private readonly DataTable IpTable = new DataTable();
-        private readonly Timer StdTestTimer = new Timer();
-        private readonly Timer RndTestTimer = new Timer();
-        private readonly Timer BndTestTimer = new Timer();
 
+        //Standard testing
+        private readonly Timer StdTestTimer = new Timer();
         private volatile bool StdTestRunning;
+
+        //Random testing
+        private readonly Timer RndTestTimer = new Timer();
         private volatile bool RndTestRunning;
+
+        //Bandwidth testing
+        private readonly Timer BndTestTimer = new Timer();
         private volatile bool BndTestRunning;
 
         private string _curAddrPool;
@@ -54,7 +59,7 @@ namespace GoGoTester
             InitializeComponent();
         }
 
-        private void Form1_Load(object sender, EventArgs e)
+        private void MainForm_Load(object sender, EventArgs e)
         {
             Icon = Resources.GoGo_logo;
 
@@ -80,10 +85,10 @@ namespace GoGoTester
             dgvIpData.Columns[4].HeaderText = "速度";
 
             StdTestTimer.Interval = 50;
-            StdTestTimer.Elapsed += StdTestTimerElapsed;
+            StdTestTimer.Elapsed += StdTestTimer_Elapsed;
 
             RndTestTimer.Interval = 50;
-            RndTestTimer.Elapsed += RndTestTimerElapsed;
+            RndTestTimer.Elapsed += RndTestTimer_Elapsed;
 
             BndTestTimer.Interval = 50;
             BndTestTimer.Elapsed += BndTestTimer_Elapsed;
@@ -97,90 +102,346 @@ namespace GoGoTester
             newVersionChecker.CheckNewUpdate(HasUpdate);
         }
 
-        private static int SetRange(int val, int min, int max)
+        private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
         {
-            val = val > min ? val : min;
-            val = val < max ? val : max;
-            return val;
-        }
+            StopTest();
 
-        private static void EnCount(Queue<int> q)
-        {
-            Monitor.Enter(q);
-            q.Enqueue(0);
-            Monitor.Exit(q);
-        }
-
-        private static void DeCount(Queue<int> q)
-        {
-            Monitor.Enter(q);
-            q.Dequeue();
-            Monitor.Exit(q);
-        }
-
-        private void HasUpdate(long currentVersionNumber, long newVersionNumber)
-        {
-            this.UIThread(() =>
+            while (ThreadQueue.Count > 0)
             {
-                linkLabel1.Text += string.Format(" - 有可用更新! - {0}", newVersionNumber);
-            });
+                Application.DoEvents();
+            }
         }
 
-        private void LoadIpPools()
+        private void bAddIpRange_Click(object sender, EventArgs e)
         {
-            PoolDic.Add("@Inner", IpPool.CreateFromText(Resources.InnerIpSet));
+            if (IsTesting())
+                return;
+
+            var str = tbIpRange.Text;
+            tbIpRange.ResetText();
+            if (str == "")
+                return;
+
+            var pool = IpPool.CreateFromText(str);
+            if (pool.Count == 0)
+                return;
+
+            ImportIps(pool);
+        }
+
+        private void nPingTimeout_ValueChanged(object sender, EventArgs e)
+        {
+            Config.ConnTimeout = Convert.ToInt32(nPingTimeout.Value);
+        }
+
+        private void nMaxTest_ValueChanged(object sender, EventArgs e)
+        {
+            Config.MaxThreads = Convert.ToInt32(nMaxThreads.Value);
+            StdTestTimer.Interval = (1000.0 / Config.MaxThreads);
+            RndTestTimer.Interval = (1000.0 / Config.MaxThreads);
+        }
+
+        private void nTestCount_ValueChanged(object sender, EventArgs e)
+        {
+            Config.PassCount = Convert.ToInt32(nTestCount.Value);
+        }
+
+        private void mImportIpsInClipbord_Click(object sender, EventArgs e)
+        {
+            if (IsTesting())
+                return;
+
+            var str = "";
             try
             {
-                var fns = Directory.GetFiles(Path.GetDirectoryName(Application.ExecutablePath), "*.ip.txt");
-                foreach (var fn in fns)
-                    using (var sr = File.OpenText(fn))
-                    {
-                        var pool = IpPool.CreateFromText(sr.ReadToEnd());
-                        if (pool.Count > 0)
-                            PoolDic.Add(Path.GetFileNameWithoutExtension(fn), pool);
-                    }
+                str = Clipboard.GetText();
             }
-            catch { }
+            catch (Exception)
+            {
+                MessageBox.Show("操作剪切板可能失败！再试一次吧！");
+                return;
+            }
 
-            SetPools();
-            cbPools.SelectedIndex = 0;
+            if (str == "")
+            {
+                MessageBox.Show("剪切板是空的！");
+                return;
+            }
 
-            new Thread(LoadSpfPools).Start();
+            var ips = GetIpsInText(str);
+            if (ips.Length == 0)
+            {
+                MessageBox.Show("剪切板内没有IP！");
+                return;
+            }
+
+            ImportIps(ips);
         }
 
-        private void SetPools()
+        private void mBandTest_Click(object sender, EventArgs e)
         {
-            if (InvokeRequired)
+            if (IsTesting() || IpTable.Rows.Count == 0)
+                return;
+
+            WaitQueue.Clear();
+
+            var rows = SelectBandNa();
+
+            if (rows.Length == 0)
             {
-                Invoke(new MethodInvoker(SetPools));
+                if (MessageBox.Show(this, "没有发现未测试的IP！是否重复测试已测试的IP？", "请确认操作", MessageBoxButtons.OKCancel, MessageBoxIcon.Information, MessageBoxDefaultButton.Button2) == DialogResult.OK)
+                    SetNa("band");
+                else
+                    return;
+            }
+
+            rows = SelectBandNa();
+
+            pbProgress.Maximum = rows.Length;
+            pbProgress.Value = 0;
+
+            foreach (var row in rows)
+            {
+                WaitQueue.Enqueue(Ip.Parse(row[0].ToString()));
+            }
+
+            BndTestRunning = true;
+            BndTestTimer.Start();
+            tlpConfig.Enabled = false;
+        }
+
+        private void mRndTest_Click(object sender, EventArgs e)
+        {
+            if (IsTesting())
+                return;
+
+            var form = new Form2();
+            form.ShowDialog(this);
+
+            if (Form2.RandomNumber == 0)
+                return;
+
+            Form2.RandomNumber = Form2.RandomNumber > _curAddrList.Count ? _curAddrList.Count : Form2.RandomNumber;
+
+            pbProgress.Maximum = Form2.RandomNumber;
+            pbProgress.Value = 0;
+
+            RndTestRunning = true;
+            RndTestTimer.Start();
+
+            tlpConfig.Enabled = false;
+        }
+
+        private void mStdTest_Click(object sender, EventArgs e)
+        {
+            if (IsTesting() || IpTable.Rows.Count == 0)
+                return;
+
+            WaitQueue.Clear();
+
+            var rows = SelectPortNa();
+
+            if (rows.Length == 0)
+                if (MessageBox.Show(this, "没有发现未测试的IP！是否重复测试已测试的IP？", "请确认操作", MessageBoxButtons.OKCancel, MessageBoxIcon.Information, MessageBoxDefaultButton.Button2) == DialogResult.OK)
+                    SetAllNa();
+                else
+                    return;
+
+            rows = SelectPortNa();
+
+            pbProgress.Maximum = rows.Length;
+            pbProgress.Value = 0;
+
+            foreach (var row in rows)
+                WaitQueue.Enqueue(Ip.Parse(row[0].ToString()));
+
+            StdTestRunning = true;
+            StdTestTimer.Start();
+            tlpConfig.Enabled = false;
+        }
+
+        private void mRemoveAllIps_Click(object sender, EventArgs e)
+        {
+            if (IsTesting())
+            {
+                return;
+            }
+
+            RemoveAllIps();
+        }
+
+        private void mExportSelectedIps_Click(object sender, EventArgs e)
+        {
+            var cells = GetSelectdIpCells();
+
+            if (cells.Length == 0)
+            {
+                MessageBox.Show("没有选中的IP！");
+                return;
+            }
+
+            try
+            {
+                Clipboard.SetText(BuildIpString(cells));
+            }
+            catch (Exception)
+            {
+                MessageBox.Show("操作剪切板可能失败！再试一次吧！");
+            }
+        }
+
+        private void mStopTest_Click(object sender, EventArgs e)
+        {
+            StopTest();
+        }
+
+        private void mExportAllIps_Click(object sender, EventArgs e)
+        {
+            var cells = GetAllIpCells();
+
+            if (cells.Length == 0)
+            {
+                MessageBox.Show("IP列表是空的！");
+                return;
+            }
+
+            try
+            {
+                Clipboard.SetText(BuildIpString(cells));
+            }
+            catch (Exception)
+            {
+                MessageBox.Show("操作剪切板可能失败！再试一次吧！");
+            }
+        }
+
+        private void mRemoveSelectedIps_Click(object sender, EventArgs e)
+        {
+            if (IsTesting())
+            {
+                return;
+            }
+
+            foreach (DataGridViewRow row in dgvIpData.SelectedRows)
+            {
+                dgvIpData.Rows.Remove(row);
+            }
+        }
+
+        private void mRemoveIpsInClipbord_Click(object sender, EventArgs e)
+        {
+            if (IsTesting())
+            {
+                return;
+            }
+
+            var str = "";
+            try
+            {
+                str = Clipboard.GetText();
+            }
+            catch (Exception)
+            {
+                MessageBox.Show("操作剪切板可能失败！再试一次吧！");
+                return;
+            }
+
+            if (str == "")
+            {
+                MessageBox.Show("剪切板是空的！");
+                return;
+            }
+
+            foreach (var ip in GetIpsInText(str))
+            {
+                RemoveIp(ip);
+            }
+        }
+
+        private void mApplySelectedIpsToUserConfig_Click(object sender, EventArgs e)
+        {
+            if (IsTesting())
+                return;
+
+            if (!File.Exists("proxy.py"))
+            {
+                MessageBox.Show("请将本程序放入GOAgent目录内！");
+                return;
+            }
+
+            var cells = GetSelectdIpCells();
+
+            if (cells.Length == 0)
+            {
+                MessageBox.Show("没有选中的IP！");
+                return;
+            }
+
+            var ipstr = BuildIpString(cells);
+
+            ApplyToUserConfig(ipstr);
+        }
+
+        private void mClearRndCache_Click(object sender, EventArgs e)
+        {
+            if (IsTesting())
+                return;
+
+            TestCaches.Clear();
+            _curAddrList.Clear();
+            _curAddrList.AddRange(PoolDic[cbPools.SelectedItem.ToString()]);
+            _curAddrList.TrimExcess();
+
+            if (File.Exists("gogo_cache"))
+                File.Delete("gogo_cache");
+        }
+
+        private void dgvIpData_RowPostPaint(object sender, DataGridViewRowPostPaintEventArgs e)
+        {
+            var bounds = new Rectangle(e.RowBounds.Location.X, e.RowBounds.Location.Y, dgvIpData.RowHeadersWidth - 4, e.RowBounds.Height);
+            TextRenderer.DrawText(e.Graphics, (e.RowIndex + 1).ToString(), dgvIpData.RowHeadersDefaultCellStyle.Font, bounds, dgvIpData.RowHeadersDefaultCellStyle.ForeColor, TextFormatFlags.VerticalCenter | TextFormatFlags.Right);
+        }
+
+        private void cbPools_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            var addrpool = cbPools.SelectedItem.ToString();
+            if (addrpool == _curAddrPool) return;
+
+            _curAddrPool = addrpool;
+            _curAddrList.Clear();
+            _curAddrList.AddRange(PoolDic[_curAddrPool].Except(TestCaches));
+            _curAddrList.TrimExcess();
+
+            Text = string.Format("GoGo Tester {0} - {1}", Application.ProductVersion, _curAddrList.Count);
+            SetStdProgress(_curAddrList.Count, TestCaches.Count);
+        }
+
+        private void mRemoveInvalidIps_Click(object sender, EventArgs e)
+        {
+            if (IsTesting()) return;
+
+            foreach (var row in GetInvalidIps())
+                IpTable.Rows.Remove(row);
+        }
+
+        private void Tip_MouseEnter(object sender, EventArgs e)
+        {
+            var control = sender as Control;
+            if (control != null)
+            {
+                lTip.Text = control.Tag.ToString();
             }
             else
             {
-                cbPools.DataSource = PoolDic.Keys.ToArray();
-            }
-        }
-
-        private void LoadSpfPools()
-        {
-            try
-            {
-                var domains = new[] { "google.com" };
-                if (File.Exists("spf.txt"))
+                var menu = sender as ToolStripMenuItem;
+                if (menu != null)
                 {
-                    using (var sr = File.OpenText("spf.txt"))
-                    {
-                        domains = (from Match m in RxDomain.Matches(sr.ReadToEnd()) select m.Value).ToArray();
-                    }
+                    lTip.Text = menu.Tag.ToString();
                 }
-
-                PoolDic.Add("@Spf.Ipv4", IpPool.CreateFromDomains(domains));
-
-                SetPools();
             }
-            catch (Exception) { }
         }
 
-        private void StdTestTimerElapsed(object sender, ElapsedEventArgs e)
+        private void StdTestTimer_Elapsed(object sender, ElapsedEventArgs e)
         {
             Monitor.Enter(ThreadQueue);
             var threadCount = ThreadQueue.Count;
@@ -188,7 +449,6 @@ namespace GoGoTester
 
             Monitor.Enter(WaitQueue);
             var waitCount = WaitQueue.Count;
-
             SetStdProgress(threadCount, waitCount);
 
             if (StdTestRunning && waitCount > 0 && threadCount < Config.MaxThreads)
@@ -215,7 +475,7 @@ namespace GoGoTester
             Monitor.Exit(WaitQueue);
         }
 
-        private void RndTestTimerElapsed(object sender, ElapsedEventArgs e)
+        private void RndTestTimer_Elapsed(object sender, ElapsedEventArgs e)
         {
             Monitor.Enter(ThreadQueue);
             var threadCount = ThreadQueue.Count;
@@ -270,6 +530,7 @@ namespace GoGoTester
                 StopTest();
                 SaveTestCache();
             }
+
             Monitor.Exit(TestCaches);
         }
 
@@ -308,7 +569,151 @@ namespace GoGoTester
             Monitor.Exit(WaitQueue);
         }
 
+        private void linkLabel1_DoubleClick(object sender, EventArgs e)
+        {
+            Process.Start("https://code.google.com/p/gogo-tester/");
+        }
+
+        private static int SetRange(int val, int min, int max)
+        {
+            val = val > min ? val : min;
+            val = val < max ? val : max;
+            return val;
+        }
+
+        private static void EnCount(Queue<int> q)
+        {
+            Monitor.Enter(q);
+            q.Enqueue(0);
+            Monitor.Exit(q);
+        }
+
+        private static void DeCount(Queue<int> q)
+        {
+            Monitor.Enter(q);
+            q.Dequeue();
+            Monitor.Exit(q);
+        }
+
+        private void HasUpdate(long currentVersionNumber, long newVersionNumber)
+        {
+            this.UIThread(() =>
+            {
+                linkLabel1.Text += string.Format(" - 有可用更新! - {0}", newVersionNumber);
+            });
+        }
+
+        private void LoadIpPools()
+        {
+            PoolDic.Add("@Inner", IpPool.CreateFromText(Resources.InnerIpSet));
+
+            try
+            {
+                var fns = Directory.GetFiles(Path.GetDirectoryName(Application.ExecutablePath), "*.ip.txt");
+                foreach (var fn in fns)
+                {
+                    using (var sr = File.OpenText(fn))
+                    {
+                        var pool = IpPool.CreateFromText(sr.ReadToEnd());
+                        if (pool.Count > 0)
+                            PoolDic.Add(Path.GetFileNameWithoutExtension(fn), pool);
+                    }
+                }
+            }
+            catch { }
+
+            SetPools();
+            cbPools.SelectedIndex = 0;
+
+            new Thread(LoadSpfPools).Start();
+        }
+
+        private void SetPools()
+        {
+            this.UIThread(() =>
+            {
+                cbPools.DataSource = PoolDic.Keys.ToArray();
+            });
+        }
+
+        private void LoadSpfPools()
+        {
+            try
+            {
+                var domains = new[] { "google.com" };
+                if (File.Exists("spf.txt"))
+                {
+                    using (var sr = File.OpenText("spf.txt"))
+                    {
+                        domains = (from Match m in RxDomain.Matches(sr.ReadToEnd()) select m.Value).ToArray();
+                    }
+                }
+
+                PoolDic.Add("@Spf.Ipv4", IpPool.CreateFromDomains(domains));
+
+                SetPools();
+            }
+            catch (Exception) { }
+        }
+
         /*** Utilities ***/
+
+        private void SaveTestCache()
+        {
+            using (var fs = File.Create("gogo_cache", 25000 * 4))
+            {
+                var count = 0;
+                foreach (var data in TestCaches.Select(addr => addr.AddressBytes).Where(data => data.Length == 4))
+                {
+                    fs.Write(data, 0, data.Length);
+                    count++;
+
+                    if (count >= 25000)
+                    {
+                        fs.Flush();
+                        count = 0;
+                    }
+                }
+
+                if (count > 0)
+                    fs.Flush();
+            }
+        }
+
+        private void LoadTestCache()
+        {
+            if (!File.Exists("gogo_cache"))
+            {
+                return;
+            }
+
+            // Delete the cache file if it was created 7 days ago
+            if (File.GetCreationTime("gogo_cache").AddDays(7) < DateTime.Now)
+            {
+                File.Delete("gogo_cache");
+                return;
+            }
+
+            using (var fs = File.OpenRead("gogo_cache"))
+            {
+                //var buf = new byte[4];
+                //for (int i = 0; i < (fs.Length / 4); i++)
+                //{
+                //    fs.Read(buf, 0, 4);
+                //    TestCaches.Add(new Ip(buf));
+                //}
+
+                var buf = new byte[4];
+                var offset = 0;
+                while (fs.Read(buf, 0, 4) > 0)
+                {
+                    var newBuf = new byte[4];
+                    Array.Copy(buf, 0, newBuf, 0, 4);
+                    TestCaches.Add(new Ip(newBuf));
+                    offset += 4;
+                }
+            }
+        }
 
         private void PlaySound()
         {
@@ -590,11 +995,7 @@ namespace GoGoTester
 
         private void ImportIp(Ip addr)
         {
-            if (InvokeRequired)
-            {
-                Invoke(new MethodInvoker(() => ImportIp(addr)));
-            }
-            else
+            this.UIThread(() =>
             {
                 try
                 {
@@ -607,24 +1008,21 @@ namespace GoGoTester
                     IpTable.Rows.Add(row);
                 }
                 catch (Exception) { }
-            }
+            });
         }
 
         private void ImportIps(IEnumerable<Ip> addrs)
         {
-            if (InvokeRequired)
-            {
-                Invoke(new MethodInvoker(() => ImportIps(addrs)));
-            }
-            else
+            this.UIThread(() =>
             {
                 dgvIpData.DataSource = null;
                 foreach (var addr in addrs)
+                {
                     ImportIp(addr);
+                }
 
                 dgvIpData.DataSource = IpTable;
-
-            }
+            });
         }
 
         private void RemoveAllIps()
@@ -635,6 +1033,7 @@ namespace GoGoTester
 
         private DataRow[] SelectByExpr(string expr, string order = null)
         {
+            //return IpTable.Select(expr, order);
             if (InvokeRequired)
                 return (DataRow[])Invoke(new MethodInvoker(() => SelectByExpr(expr, order)));
             else
@@ -668,35 +1067,20 @@ namespace GoGoTester
         private void SetAllNa()
         {
             foreach (var row in IpTable.Select())
+            {
                 row[4] = row[3] = row[2] = row[1] = "n/a";
+            }
         }
 
         private void SetNa(string coln)
         {
             foreach (var row in IpTable.Select())
+            {
                 row[coln] = "n/a";
+            }
         }
 
         #endregion
-
-        private void Tip_MouseEnter(object sender, EventArgs e)
-        {
-            var control = sender as Control;
-
-            if (control != null)
-            {
-                lTip.Text = control.Tag.ToString();
-            }
-            else
-            {
-                var menu = sender as ToolStripMenuItem;
-                if (menu != null)
-                {
-                    lTip.Text = menu.Tag.ToString();
-                }
-            }
-
-        }
 
         private bool IsTesting()
         {
@@ -705,145 +1089,8 @@ namespace GoGoTester
                 MessageBox.Show("有测试正在进行，无法继续操作！");
                 return true;
             }
+
             return false;
-        }
-
-        private void bAddIpRange_Click(object sender, EventArgs e)
-        {
-            if (IsTesting()) return;
-
-            var str = tbIpRange.Text;
-            tbIpRange.ResetText();
-            if (str == "") return;
-
-            var pool = IpPool.CreateFromText(str);
-            if (pool.Count == 0) return;
-
-            ImportIps(pool);
-        }
-
-        private void Form1_FormClosing(object sender, FormClosingEventArgs e)
-        {
-            StopTest();
-            while (ThreadQueue.Count > 0)
-                Application.DoEvents();
-        }
-
-        private void mImportIpsInClipbord_Click(object sender, EventArgs e)
-        {
-            if (IsTesting()) return;
-
-            var str = "";
-            try
-            {
-                str = Clipboard.GetText();
-            }
-            catch (Exception)
-            {
-                MessageBox.Show("操作剪切板可能失败！再试一次吧！");
-                return;
-            }
-
-            if (str == "")
-            {
-                MessageBox.Show("剪切板是空的！");
-                return;
-            }
-
-            var ips = GetIpsInText(str);
-
-            if (ips.Length == 0)
-            {
-                MessageBox.Show("剪切板内没有IP！");
-                return;
-            }
-
-            ImportIps(ips);
-        }
-
-        private void mBandTest_Click(object sender, EventArgs e)
-        {
-            if (IsTesting() || IpTable.Rows.Count == 0) return;
-
-            WaitQueue.Clear();
-
-            var rows = SelectBandNa();
-
-            if (rows.Length == 0)
-                if (MessageBox.Show(this, "没有发现未测试的IP！是否重复测试已测试的IP？", "请确认操作", MessageBoxButtons.OKCancel, MessageBoxIcon.Information, MessageBoxDefaultButton.Button2) == DialogResult.OK)
-                    SetNa("band");
-                else
-                    return;
-
-            rows = SelectBandNa();
-
-            pbProgress.Maximum = rows.Length;
-            pbProgress.Value = 0;
-
-            foreach (var row in rows)
-                WaitQueue.Enqueue(Ip.Parse(row[0].ToString()));
-
-            BndTestRunning = true;
-            BndTestTimer.Start();
-            tlpConfig.Enabled = false;
-        }
-
-        private void mRndTest_Click(object sender, EventArgs e)
-        {
-            if (IsTesting()) return;
-
-            var form = new Form2();
-            form.ShowDialog(this);
-
-            if (Form2.RandomNumber == 0)
-                return;
-
-            Form2.RandomNumber = Form2.RandomNumber > _curAddrList.Count ? _curAddrList.Count : Form2.RandomNumber;
-
-            pbProgress.Maximum = Form2.RandomNumber;
-            pbProgress.Value = 0;
-
-            RndTestRunning = true;
-            RndTestTimer.Start();
-
-            tlpConfig.Enabled = false;
-        }
-
-        private void mStdTest_Click(object sender, EventArgs e)
-        {
-            if (IsTesting() || IpTable.Rows.Count == 0) return;
-
-            WaitQueue.Clear();
-
-            var rows = SelectPortNa();
-
-            if (rows.Length == 0)
-                if (MessageBox.Show(this, "没有发现未测试的IP！是否重复测试已测试的IP？", "请确认操作", MessageBoxButtons.OKCancel, MessageBoxIcon.Information, MessageBoxDefaultButton.Button2) == DialogResult.OK)
-                    SetAllNa();
-                else
-                    return;
-
-            rows = SelectPortNa();
-
-            pbProgress.Maximum = rows.Length;
-            pbProgress.Value = 0;
-
-            foreach (var row in rows)
-                WaitQueue.Enqueue(Ip.Parse(row[0].ToString()));
-
-            StdTestRunning = true;
-            StdTestTimer.Start();
-            tlpConfig.Enabled = false;
-        }
-
-        private void mRemoveAllIps_Click(object sender, EventArgs e)
-        {
-            if (IsTesting())
-            {
-                return;
-            }
-
-            RemoveAllIps();
         }
 
         private DataGridViewCell[] GetSelectdIpCells()
@@ -894,45 +1141,6 @@ namespace GoGoTester
             return sbd.ToString();
         }
 
-        private void mExportSelectedIps_Click(object sender, EventArgs e)
-        {
-            var cells = GetSelectdIpCells();
-
-            if (cells.Length == 0)
-            {
-                MessageBox.Show("没有选中的IP！");
-                return;
-            }
-
-            try
-            {
-                Clipboard.SetText(BuildIpString(cells));
-            }
-            catch (Exception) { MessageBox.Show("操作剪切板可能失败！再试一次吧！"); }
-        }
-
-        private void nPingTimeout_ValueChanged(object sender, EventArgs e)
-        {
-            Config.ConnTimeout = Convert.ToInt32(nPingTimeout.Value);
-        }
-
-        private void nMaxTest_ValueChanged(object sender, EventArgs e)
-        {
-            Config.MaxThreads = Convert.ToInt32(nMaxThreads.Value);
-            StdTestTimer.Interval = (1000.0 / Config.MaxThreads);
-            RndTestTimer.Interval = (1000.0 / Config.MaxThreads);
-        }
-
-        private void nTestCount_ValueChanged(object sender, EventArgs e)
-        {
-            Config.PassCount = Convert.ToInt32(nTestCount.Value);
-        }
-
-        private void mStopTest_Click(object sender, EventArgs e)
-        {
-            StopTest();
-        }
-
         private void StopTest()
         {
             if (InvokeRequired)
@@ -943,66 +1151,6 @@ namespace GoGoTester
             {
                 StdTestRunning = RndTestRunning = BndTestRunning = false;
                 tlpConfig.Enabled = true;
-            }
-        }
-
-        private void mExportAllIps_Click(object sender, EventArgs e)
-        {
-            var cells = GetAllIpCells();
-
-            if (cells.Length == 0)
-            {
-                MessageBox.Show("IP列表是空的！");
-                return;
-            }
-
-            try
-            {
-                Clipboard.SetText(BuildIpString(cells));
-            }
-            catch (Exception) { MessageBox.Show("操作剪切板可能失败！再试一次吧！"); }
-        }
-
-        private void mRemoveSelectedIps_Click(object sender, EventArgs e)
-        {
-            if (IsTesting())
-            {
-                return;
-            }
-
-            foreach (DataGridViewRow row in dgvIpData.SelectedRows)
-            {
-                dgvIpData.Rows.Remove(row);
-            }
-        }
-
-        private void mRemoveIpsInClipbord_Click(object sender, EventArgs e)
-        {
-            if (IsTesting())
-            {
-                return;
-            }
-
-            var str = "";
-            try
-            {
-                str = Clipboard.GetText();
-            }
-            catch (Exception)
-            {
-                MessageBox.Show("操作剪切板可能失败！再试一次吧！");
-                return;
-            }
-
-            if (str == "")
-            {
-                MessageBox.Show("剪切板是空的！");
-                return;
-            }
-
-            foreach (var ip in GetIpsInText(str))
-            {
-                RemoveIp(ip);
             }
         }
 
@@ -1045,78 +1193,6 @@ namespace GoGoTester
             return ls.ToArray();
         }
 
-        private void mApplySelectedIpsToUserConfig_Click(object sender, EventArgs e)
-        {
-            if (IsTesting()) return;
-
-            if (!File.Exists("proxy.py"))
-            {
-                MessageBox.Show("请将本程序放入GOAgent目录内！");
-                return;
-            }
-
-            var cells = GetSelectdIpCells();
-
-            if (cells.Length == 0)
-            {
-                MessageBox.Show("没有选中的IP！");
-                return;
-            }
-
-            var ipstr = BuildIpString(cells);
-
-            ApplyToUserConfig(ipstr);
-        }
-
-        private void linkLabel1_DoubleClick(object sender, EventArgs e)
-        {
-            Process.Start("https://code.google.com/p/gogo-tester/");
-        }
-
-        private void SaveTestCache()
-        {
-            using (var fs = File.Create("gogo_cache", 25000 * 4))
-            {
-                var count = 0;
-                foreach (var data in TestCaches.Select(addr => addr.AddressBytes).Where(data => data.Length == 4))
-                {
-                    fs.Write(data, 0, data.Length);
-                    count++;
-
-                    if (count >= 25000)
-                    {
-                        fs.Flush();
-                        count = 0;
-                    }
-                }
-
-                if (count > 0)
-                    fs.Flush();
-            }
-        }
-
-        private void LoadTestCache()
-        {
-            if (!File.Exists("gogo_cache")) return;
-
-            if (File.GetCreationTime("gogo_cache").AddDays(7) < DateTime.Now)
-            {
-                File.Delete("gogo_cache");
-                return;
-            }
-
-            using (var fs = File.OpenRead("gogo_cache"))
-            {
-                var buf = new byte[4];
-                for (int i = 0; i < (fs.Length / 4); i++)
-                {
-                    fs.Read(buf, 0, 4);
-                    TestCaches.Add(new Ip(buf));
-                }
-            }
-
-        }
-
         private DataRow[] GetValidIps()
         {
             var rows = SelectByExpr(string.Format("sslc <> 'n/a' and sslc not like 'NN%'"), "port asc");
@@ -1127,45 +1203,6 @@ namespace GoGoTester
         {
             return SelectByExpr(
                 string.Format("(port <> 'n/a' and port not like '_OK%') or (sslc <> 'n/a' and sslc like 'NN%')"));
-        }
-
-        private void mClearRndCache_Click(object sender, EventArgs e)
-        {
-            if (IsTesting())
-                return;
-            TestCaches.Clear();
-            _curAddrList.Clear();
-            _curAddrList.AddRange(PoolDic[cbPools.SelectedItem.ToString()]);
-            _curAddrList.TrimExcess();
-            if (File.Exists("gogo_cache"))
-                File.Delete("gogo_cache");
-        }
-
-        private void dgvIpData_RowPostPaint(object sender, DataGridViewRowPostPaintEventArgs e)
-        {
-            var bounds = new Rectangle(e.RowBounds.Location.X, e.RowBounds.Location.Y, dgvIpData.RowHeadersWidth - 4, e.RowBounds.Height);
-            TextRenderer.DrawText(e.Graphics, (e.RowIndex + 1).ToString(), dgvIpData.RowHeadersDefaultCellStyle.Font, bounds, dgvIpData.RowHeadersDefaultCellStyle.ForeColor, TextFormatFlags.VerticalCenter | TextFormatFlags.Right);
-        }
-
-        private void cbPools_SelectedIndexChanged(object sender, EventArgs e)
-        {
-            var addrpool = cbPools.SelectedItem.ToString();
-            if (addrpool == _curAddrPool) return;
-
-            _curAddrPool = addrpool;
-            _curAddrList.Clear();
-            _curAddrList.AddRange(PoolDic[_curAddrPool].Except(TestCaches));
-            _curAddrList.TrimExcess();
-            Text = string.Format("GoGo Tester {0} - {1}", Application.ProductVersion, _curAddrList.Count);
-            SetStdProgress(_curAddrList.Count, TestCaches.Count);
-        }
-
-        private void mRemoveInvalidIps_Click(object sender, EventArgs e)
-        {
-            if (IsTesting()) return;
-
-            foreach (var row in GetInvalidIps())
-                IpTable.Rows.Remove(row);
         }
     }
 }

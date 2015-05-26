@@ -9,7 +9,7 @@ namespace GoGoTester.Common
 {
     public class NewVersionChecker
     {
-        public void CheckNewUpdate(Action<long, long> callBack)
+        public void CheckNewUpdate(Action<long, long> updateAvailableCallBack)
         {
             try
             {
@@ -30,7 +30,7 @@ namespace GoGoTester.Common
                         var remoteNewVersion = long.Parse(sr.ReadToEnd());
                         if (remoteNewVersion < localVersion)
                         {
-                            callBack(localVersion, remoteNewVersion);
+                            updateAvailableCallBack(localVersion, remoteNewVersion);
                         }
                         else
                         {
